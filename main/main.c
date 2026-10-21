@@ -18,6 +18,8 @@
 static const char* Tag = "PIN-1";
 
 void uart_init(void);
+void uart_txd(int*);
+void uart_rxd(uint8_t*);
 
 void app_main()
 {
@@ -28,26 +30,9 @@ void app_main()
     printf("%s\n",Tag);
     while(1)
     {
-       char tx_msg[64];
-       int len = snprintf(tx_msg,sizeof(tx_msg),"PING:%d",counter++);
-
-       //(uart_port_t uart_num, const void *src, size_t size, int brk_len)
-       uart_write_bytes(UART_NUM_1,tx_msg,len);
-
-       printf("\nBYTES SENT [%d] MSG: [%s] sent\n",len,tx_msg);
-
-        //(uart_port_t uart_num, void *buf, uint32_t length, uint32_t ticks_to_wait)
-       int rx_len = uart_read_bytes(UART_NUM_1,rx_buf,Buf_size-1,pdMS_TO_TICKS(500));
-
-       if(rx_len>0)
-       {
-        rx_buf[rx_len] = '\0';
-        printf("      Recived byes :%d  recived data : [%s]\n",rx_len,(char*)rx_buf);
-       }
-       else
-       {
-        printf("\nnothing recived\n");
-       }
+       uart_txd(&counter);
+       //counter++;//after sometime pass this as a pointer to a uart_txd()
+       uart_rxd(rx_buf);
        vTaskDelay(pdMS_TO_TICKS(1500));
     
     }
@@ -75,4 +60,30 @@ void uart_init(void)
     //(uart_port_t uart_num, int TXD, int RXD, ...)
     ESP_ERROR_CHECK(uart_set_pin(UART_PORT,TXD_PIN,RXD_PIN,
                                 UART_PIN_NO_CHANGE,UART_PIN_NO_CHANGE));                
+}
+
+void uart_rxd(uint8_t* rx_buf)
+{
+     //(uart_port_t uart_num, void *buf, uint32_t length, uint32_t ticks_to_wait)
+       int rx_len = uart_read_bytes(UART_NUM_1,rx_buf,Buf_size-1,pdMS_TO_TICKS(500));
+
+       if(rx_len>0)
+       {
+        rx_buf[rx_len] = '\0';
+        printf("      Recived byes :%d  recived data : [%s]\n",rx_len,(char*)rx_buf);
+       }
+       else
+       {
+        printf("\nnothing recived\n");
+       }
+}
+
+void uart_txd(int* counter)
+{
+    char tx_msg[64];
+    int len = snprintf(tx_msg,sizeof(tx_msg),"PING:%d",(*counter)++);
+    //(uart_port_t uart_num, const void *src, size_t size, int brk_len)
+    uart_write_bytes(UART_NUM_1,tx_msg,len);
+
+    printf("\nBYTES SENT [%d] MSG: [%s] sent\n",len,tx_msg);
 }
