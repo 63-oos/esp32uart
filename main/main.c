@@ -8,6 +8,8 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 
 #define UART_PORT       UART_NUM_1
 #define TXD_PIN         4           //Change to free GPIO on board
@@ -18,23 +20,63 @@
 static const char* Tag = "PIN-1";
 
 void uart_init(void);
-void uart_txd(int*);
+void uart_txd(char*);
 void uart_rxd(uint8_t*);
+
+static void console_init(void)
+{
+    usb_serial_jtag_driver_config_t usb_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_cfg));
+    usb_serial_jtag_vfs_use_driver();
+
+    // idf_monitor sends CR (\r) when you press Enter; tell the VFS layer
+    // to treat that as the line ending so fgets() actually terminates.
+    usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
+    usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
+    setvbuf(stdin, NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
+}
+
 
 void app_main()
 {
+    console_init();
     uart_init();
     uint8_t rx_buf[Buf_size];
-    int counter = 0;
+    char line[32];
+    int idx = 0;
 
     printf("%s\n",Tag);
     while(1)
     {
-       uart_txd(&counter);
-       //counter++;//after sometime pass this as a pointer to a uart_txd()
-       uart_rxd(rx_buf);
-       vTaskDelay(pdMS_TO_TICKS(1500));
-    
+        int c = getchar();
+        if(c == EOF)
+        {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        if(c=='\r'||c=='\n')
+        {
+            line[idx] = '\0';
+            if(idx>0){
+                uart_txd(line);
+                uart_rxd(rx_buf);
+            }
+            idx = 0;
+        }
+        else if(c=='\b'||c==127)
+        {
+            if(idx>0)
+            {
+                idx--;
+                printf("\b \b");
+            }
+        }
+        else if(idx<(int)sizeof(line)-1)
+        {
+            line[idx++] = (char)c;
+            putchar(c);
+        }
     }
 }
 
@@ -65,12 +107,12 @@ void uart_init(void)
 void uart_rxd(uint8_t* rx_buf)
 {
      //(uart_port_t uart_num, void *buf, uint32_t length, uint32_t ticks_to_wait)
-       int rx_len = uart_read_bytes(UART_NUM_1,rx_buf,Buf_size-1,pdMS_TO_TICKS(500));
+       int rx_len = uart_read_bytes(UART_PORT,rx_buf,Buf_size-1,pdMS_TO_TICKS(500));
 
        if(rx_len>0)
        {
         rx_buf[rx_len] = '\0';
-        printf("      Recived byes :%d  recived data : [%s]\n",rx_len,(char*)rx_buf);
+        printf("Recived bytes :%d  recived data : [%s]\n",rx_len,(char*)rx_buf);
        }
        else
        {
@@ -78,12 +120,11 @@ void uart_rxd(uint8_t* rx_buf)
        }
 }
 
-void uart_txd(int* counter)
+void uart_txd(char* cmd)
 {
-    char tx_msg[64];
-    int len = snprintf(tx_msg,sizeof(tx_msg),"PING:%d",(*counter)++);
+    int len = strlen(cmd);
     //(uart_port_t uart_num, const void *src, size_t size, int brk_len)
-    uart_write_bytes(UART_NUM_1,tx_msg,len);
+    uart_write_bytes(UART_PORT,cmd,len);
 
-    printf("\nBYTES SENT [%d] MSG: [%s] sent\n",len,tx_msg);
+    printf("\nBYTES SENT [%d] MSG: [%s] sent\n",len,cmd);
 }
