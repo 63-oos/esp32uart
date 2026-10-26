@@ -20,8 +20,19 @@
 static const char* Tag = "PIN-1";
 
 void uart_init(void);
-void uart_txd(char*);
-void uart_rxd(uint8_t*);
+void uart_txd(void*);
+void uart_rxd(void*);
+static void console_init(void);
+
+void app_main()
+{
+    console_init();
+    uart_init();
+    
+    xTaskCreate(uart_txd,"tx_task",3072,NULL,10,NULL);
+    xTaskCreate(uart_rxd,"rx_task",3072,NULL,9,NULL);
+
+}
 
 static void console_init(void)
 {
@@ -35,49 +46,6 @@ static void console_init(void)
     usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
     setvbuf(stdin, NULL, _IONBF, 0);
     setvbuf(stdout, NULL, _IONBF, 0);
-}
-
-
-void app_main()
-{
-    console_init();
-    uart_init();
-    uint8_t rx_buf[Buf_size];
-    char line[32];
-    int idx = 0;
-
-    printf("%s\n",Tag);
-    while(1)
-    {
-        int c = getchar();
-        if(c == EOF)
-        {
-            vTaskDelay(pdMS_TO_TICKS(50));
-            continue;
-        }
-        if(c=='\r'||c=='\n')
-        {
-            line[idx] = '\0';
-            if(idx>0){
-                uart_txd(line);
-                uart_rxd(rx_buf);
-            }
-            idx = 0;
-        }
-        else if(c=='\b'||c==127)
-        {
-            if(idx>0)
-            {
-                idx--;
-                printf("\b \b");
-            }
-        }
-        else if(idx<(int)sizeof(line)-1)
-        {
-            line[idx++] = (char)c;
-            putchar(c);
-        }
-    }
 }
 
 void uart_init(void)
@@ -104,27 +72,61 @@ void uart_init(void)
                                 UART_PIN_NO_CHANGE,UART_PIN_NO_CHANGE));                
 }
 
-void uart_rxd(uint8_t* rx_buf)
+void uart_rxd(void *pv)
 {
-     //(uart_port_t uart_num, void *buf, uint32_t length, uint32_t ticks_to_wait)
-       int rx_len = uart_read_bytes(UART_PORT,rx_buf,Buf_size-1,pdMS_TO_TICKS(500));
+    while(1)
+    {
+        uint8_t rx_buf[Buf_size];
+        //(uart_port_t uart_num, void *buf, uint32_t length, uint32_t ticks_to_wait)
+        int rx_len = uart_read_bytes(UART_PORT,rx_buf,Buf_size-1,pdMS_TO_TICKS(500));
 
-       if(rx_len>0)
-       {
-        rx_buf[rx_len] = '\0';
-        printf("Recived bytes :%d  recived data : [%s]\n",rx_len,(char*)rx_buf);
-       }
-       else
-       {
-        printf("\nnothing recived\n");
-       }
+        if(rx_len>0)
+        {
+            rx_buf[rx_len] = '\0';
+            printf("Recived bytes :%d  recived data : %s",rx_len,(char*)rx_buf);
+        }
+    }
 }
 
-void uart_txd(char* cmd)
+void uart_txd(void *pv)
 {
-    int len = strlen(cmd);
-    //(uart_port_t uart_num, const void *src, size_t size, int brk_len)
-    uart_write_bytes(UART_PORT,cmd,len);
 
-    printf("\nBYTES SENT [%d] MSG: [%s] sent\n",len,cmd);
+    char line[32];
+    int idx = 0;
+
+    printf("%s\n",Tag);
+    while(1)
+    {
+        int c = getchar();
+        if(c == EOF)
+        {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+        if(c=='\r'||c=='\n')
+        {
+            line[idx] = '\0';
+            if(idx>0){
+                int len = strlen(line);
+                //(uart_port_t uart_num, const void *src, size_t size, int brk_len)
+                uart_write_bytes(UART_PORT,line,len);
+
+                printf("\nBYTES SENT [%d] MSG: [%s] sent\n",len,line);
+            }
+            idx = 0;
+        }
+        else if(c=='\b'||c==127)
+        {
+            if(idx>0)
+            {
+                idx--;
+                printf("\b \b");
+            }
+        }
+        else if(idx<(int)sizeof(line)-1)
+        {
+            line[idx++] = (char)c;
+            putchar(c);
+        }
+    }
 }
