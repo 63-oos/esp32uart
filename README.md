@@ -193,6 +193,12 @@ python3 fullduplex_uart.py
 ```
 Press Ctrl+C to exit.
 
+## Experiments
+- Break the baud rate on purpose. Change the Pi script to 9600 while the ESP32 stays at 115200. Polling gave you garbage text. Here you should see [EVENT] Frame error lines. Seeing the error event is the point of this version.
+- Send a long message (about 200 characters) from the Pi. Watch how the data arrives, possibly across more than one UART_DATA event.
+- Add a measurement after the printf in UART_DATA: printf("stack free: %u\n", (unsigned)uxTaskGetStackHighWaterMark(NULL));. Then use the sizing method from earlier to choose the final stack size for uart_event_task.
+- Disconnect the Pi’s GND while it sends. Events and garbage often show up.
+
 ## Future Improvements
 
 - GPIO Control via UART: Control the ESP32 onboard LED from the Raspberry Pi by sending commands over UART.

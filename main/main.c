@@ -1,5 +1,6 @@
 /*
- *Stage-1 UART polling LOOPBACK
+ *Stage-2 UART Interrupt ESP32C3 <====> PI 5
+ 
 
 */
 #include<stdio.h>
@@ -16,8 +17,11 @@
 #define RXD_PIN         5           //
 #define Buf_size        1024
 #define Baud_rate       9600        //9600 / 115200
+#define QUEUE_LEN       20          //
 
-static const char* Tag = "PIN-1";
+static QueueHandle_t uart_queue;
+
+static const char* Tag = "PIN-2";
 
 void uart_init(void);
 void uart_txd(void*);
@@ -65,25 +69,67 @@ void uart_init(void)
     ESP_ERROR_CHECK(uart_param_config(UART_PORT,&uart_config));
 
     //(uart_port_t uart_num, int rx_buffer_size, int tx_buffer_size, int queue_size, QueueHandle_t *uart_queue, int intr_alloc_flags)
-    ESP_ERROR_CHECK(uart_driver_install(UART_PORT,Buf_size*2,Buf_size*2,0,NULL,0));
+    ESP_ERROR_CHECK(uart_driver_install(UART_PORT,Buf_size*2,Buf_size*2,QUEUE_LEN,&uart_queue,0));
 
     //(uart_port_t uart_num, int TXD, int RXD, ...)
     ESP_ERROR_CHECK(uart_set_pin(UART_PORT,TXD_PIN,RXD_PIN,
-                                UART_PIN_NO_CHANGE,UART_PIN_NO_CHANGE));                
+                                UART_PIN_NO_CHANGE,UART_PIN_NO_CHANGE));
+    gpio_set_pull_mode(RXD_PIN,GPIO_PULLUP_ONLY);               
 }
-
+// Sleeps until the driver posts an event. No 100 ms polling loop.
 void uart_rxd(void *pv)
 {
+    uart_event_t event;
+    uint8_t rx_buf[Buf_size];
     while(1)
     {
-        uint8_t rx_buf[Buf_size];
-        //(uart_port_t uart_num, void *buf, uint32_t length, uint32_t ticks_to_wait)
-        int rx_len = uart_read_bytes(UART_PORT,rx_buf,Buf_size-1,pdMS_TO_TICKS(500));
-
-        if(rx_len>0)
+        if(xQueueReceive(uart_queue,&event,portMAX_DELAY))
         {
-            rx_buf[rx_len] = '\0';
-            printf("Recived bytes :%d  recived data : %s",rx_len,(char*)rx_buf);
+            switch(event.type)
+            {
+                case UART_DATA:
+                {
+                    size_t remaining = event.size;
+                    while(remaining>0)
+                    {
+                        size_t chunk = remaining<sizeof(rx_buf)-1?remaining:sizeof(rx_buf)-1;
+                        //(uart_port_t uart_num, void *buf, uint32_t length, uint32_t ticks_to_wait)
+                        //int rx_len = uart_read_bytes(UART_PORT,rx_buf,Buf_size-1,pdMS_TO_TICKS(20));
+                        int rx_len = uart_read_bytes(UART_PORT,rx_buf,chunk,pdMS_TO_TICKS(20));
+
+                        if(rx_len<=0)
+                        break;
+                        rx_buf[rx_len] = '\0';
+                        printf("Recived bytes :%d  recived data : %s",rx_len,(char*)rx_buf);
+            /*          printf("[rx_task] lowest free stack: %u bytes\n",
+                            (unsigned)uxTaskGetStackHighWaterMark(NULL));*/
+                        remaining -= rx_len;
+                    }
+                    break;
+                }
+                case UART_FIFO_OVF:
+                    printf("[Event] Hardware FIFO overflow, flushing\n");
+                    uart_flush_input(UART_PORT);
+                    xQueueReset(uart_queue);
+                    break;
+                case UART_BUFFER_FULL:
+                    printf("[EVENT] Ring buffer full, flushing\n");
+                    uart_flush_input(UART_PORT);
+                    xQueueReset(uart_queue);
+                    break;
+                case UART_FRAME_ERR:
+                    printf("[EVENT] Frame error (baude mismatch or noise?)\n");
+                    break;
+                case UART_PARITY_ERR:
+                    printf("[EVENT] parity error\n");
+                    break;
+                case UART_BREAK:
+                    printf("[EVENT] break detected\n");
+                    break;
+                default:
+                    printf("[EVENT] other event type: %d\n",event.type);
+                    break;
+            }
         }
     }
 }
@@ -110,8 +156,9 @@ void uart_txd(void *pv)
                 int len = strlen(line);
                 //(uart_port_t uart_num, const void *src, size_t size, int brk_len)
                 uart_write_bytes(UART_PORT,line,len);
-
                 printf("\nBYTES SENT [%d] MSG: [%s] sent\n",len,line);
+                printf("[rx_task] lowest free stack: %u bytes\n",
+                   (unsigned)uxTaskGetStackHighWaterMark(NULL));
             }
             idx = 0;
         }
