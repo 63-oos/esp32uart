@@ -193,6 +193,32 @@ python3 fullduplex_uart.py
 ```
 Press Ctrl+C to exit.
 
+## Test Data Transmission and Receving simultaneously 
+Run the following Python program on the Raspberry Pi to send data sent by the ESP32.
+Save it as testfd.py:
+
+```python
+import serial
+
+ser = serial.Serial('/dev/ttyAMA0', 115200, timeout=1)
+ser.reset_input_buffer()     # discard anything left over, like the old READY line
+
+print("Commands: on, off, toggle, status   (Ctrl+C to quit)")
+while True:
+    cmd = input("> ").strip()
+    if not cmd:
+        continue
+    ser.write((cmd + "\n").encode())
+    reply = ser.readline().decode(errors='ignore').strip()
+    print("ESP32:", reply if reply else "(no reply)")
+```
+
+Run the program:
+```bash
+python3 testfd.py
+
+```
+
 ## Experiments
 - Break the baud rate on purpose. Change the Pi script to 9600 while the ESP32 stays at 115200. Polling gave you garbage text. Here you should see [EVENT] Frame error lines. Seeing the error event is the point of this version.
 - Send a long message (about 200 characters) from the Pi. Watch how the data arrives, possibly across more than one UART_DATA event.

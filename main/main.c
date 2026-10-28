@@ -19,24 +19,44 @@
 #define Baud_rate       9600        //9600 / 115200
 #define QUEUE_LEN       20          //
 
+
+#define LED             GPIO_NUM_8
+#define Led_Active_Low  0
+
 static QueueHandle_t uart_queue;
 
 static const char* Tag = "PIN-2";
+static bool led_state = true;
+
+
 
 void uart_init(void);
 void uart_txd(void*);
 void uart_rxd(void*);
 static void console_init(void);
+void uart_send(const char*);
+void cmd_process(const char);
+void handle_cmd(const char*);
+static void led_set(bool);
 
 void app_main()
 {
+    char msg[64];
     console_init();
     uart_init();
+    gpio_reset_pin(GPIO_NUM_8);
+    gpio_set_direction(GPIO_NUM_8, GPIO_MODE_OUTPUT);
+    led_set(true);
     
     xTaskCreate(uart_txd,"tx_task",3072,NULL,10,NULL);
     xTaskCreate(uart_rxd,"rx_task",3072,NULL,9,NULL);
 
+    printf("SEND: on / off / toggle / status / from pi\n");
+    snprintf(msg,sizeof(msg),"SEND: on / off / toggle / status...\n");
+    printf("READY\n");
 }
+
+/*=========================================INIT==================================================*/
 
 static void console_init(void)
 {
@@ -76,11 +96,14 @@ void uart_init(void)
                                 UART_PIN_NO_CHANGE,UART_PIN_NO_CHANGE));
     gpio_set_pull_mode(RXD_PIN,GPIO_PULLUP_ONLY);               
 }
+
+/*========================================RXD=========================================================*/
+
 // Sleeps until the driver posts an event. No 100 ms polling loop.
 void uart_rxd(void *pv)
 {
     uart_event_t event;
-    uint8_t rx_buf[Buf_size];
+    char rx_buf[Buf_size];
     while(1)
     {
         if(xQueueReceive(uart_queue,&event,portMAX_DELAY))
@@ -96,13 +119,13 @@ void uart_rxd(void *pv)
                         //(uart_port_t uart_num, void *buf, uint32_t length, uint32_t ticks_to_wait)
                         //int rx_len = uart_read_bytes(UART_PORT,rx_buf,Buf_size-1,pdMS_TO_TICKS(20));
                         int rx_len = uart_read_bytes(UART_PORT,rx_buf,chunk,pdMS_TO_TICKS(20));
-
                         if(rx_len<=0)
                         break;
-                        rx_buf[rx_len] = '\0';
-                        printf("Recived bytes :%d  recived data : %s",rx_len,(char*)rx_buf);
-            /*          printf("[rx_task] lowest free stack: %u bytes\n",
+/*                      printf("Recived bytes :%d  recived data : %s\n",rx_len,(char*)rx_buf);
+                        printf("[rx_task] lowest free stack: %u bytes\n",
                             (unsigned)uxTaskGetStackHighWaterMark(NULL));*/
+                        for(int i =0; i<rx_len;i++)
+                            cmd_process(rx_buf[i]);
                         remaining -= rx_len;
                     }
                     break;
@@ -134,6 +157,8 @@ void uart_rxd(void *pv)
     }
 }
 
+/*============================================txd================================================*/
+
 void uart_txd(void *pv)
 {
 
@@ -153,12 +178,15 @@ void uart_txd(void *pv)
         {
             line[idx] = '\0';
             if(idx>0){
-                int len = strlen(line);
-                //(uart_port_t uart_num, const void *src, size_t size, int brk_len)
-                uart_write_bytes(UART_PORT,line,len);
+                uart_send(line);
+                printf("\n");
+
+/*              debugging part
                 printf("\nBYTES SENT [%d] MSG: [%s] sent\n",len,line);
                 printf("[rx_task] lowest free stack: %u bytes\n",
                    (unsigned)uxTaskGetStackHighWaterMark(NULL));
+*/
+
             }
             idx = 0;
         }
@@ -172,8 +200,71 @@ void uart_txd(void *pv)
         }
         else if(idx<(int)sizeof(line)-1)
         {
-            line[idx++] = (char)c;
+            line[idx++] = c;
             putchar(c);
         }
     }
+}
+void uart_send(const char* s)
+{
+    //(uart_port_t uart_num, const void *src, size_t size, int brk_len)
+    uart_write_bytes(UART_PORT,s,strlen(s));
+}
+
+/*===============================handle cmd========================================*/
+
+static char line[32];
+static int idx = 0;
+
+void cmd_process(const char c)
+{
+    
+    if(c=='\n'||c=='\r')
+    {
+        if(c>0)
+        {
+            line[idx++] = '\0';
+            handle_cmd(line);
+            idx=0;
+        }
+    }
+    else if(idx<sizeof(line)-1)
+    {
+        line[idx++] = c;
+    }
+    //else line to long, extra character are dropped
+    
+}
+void handle_cmd(const char* cmd)
+{
+    char Ready[32];
+    if((strcmp(cmd,"on"))==0)
+    {
+        led_set(false);
+        uart_send("LED ON\n");
+    }
+    else if((strcmp(cmd,"off"))==0)
+    {
+        led_set(true);
+        uart_send("LED OFF\n");
+    }
+    else if(strcmp(cmd,"toggle")==0)
+    {
+        led_state = !led_state;
+        led_set(led_state);
+        snprintf(Ready,sizeof(Ready),"LED %s\n",led_state?"OFF":"ON");
+        uart_send(Ready);
+    }
+    else if(strcmp(cmd,"status")==0)
+    {
+        snprintf(Ready,sizeof(Ready),"LED %s\n",led_state?"OFF":"ON");
+        uart_send(Ready);
+    }
+    printf("[CMD]: %s \n",cmd);
+}
+
+static void led_set(bool on)
+{
+    led_state = Led_Active_Low?!on:on;
+    gpio_set_level(GPIO_NUM_8,led_state);
 }
