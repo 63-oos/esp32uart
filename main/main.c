@@ -21,9 +21,11 @@
 
 
 #define LED             GPIO_NUM_8
+#define BUTTON          GPIO_NUM_9
 #define Led_Active_Low  0
 
 static QueueHandle_t uart_queue;
+static QueueHandle_t button_queue;
 
 static const char* Tag = "PIN-2";
 static bool led_state = true;
@@ -31,6 +33,7 @@ static bool led_state = true;
 
 
 void uart_init(void);
+static void button_init(void);
 void uart_txd(void*);
 void uart_rxd(void*);
 static void console_init(void);
@@ -38,11 +41,21 @@ void uart_send(const char*);
 void cmd_process(const char);
 void handle_cmd(const char*);
 static void led_set(bool);
+static void Button_task(void*);
+
+static void IRAM_ATTR button_isr_handler(void*arg)
+{
+    uint32_t gpio_num = (uint32_t)arg;
+    BaseType_t woken = pdFALSE;
+    xQueueSendFromISR(button_queue,&gpio_num,&woken);
+    if(woken) portYIELD_FROM_ISR(woken);
+}
 
 void app_main()
 {
     char msg[64];
     console_init();
+    button_init();
     uart_init();
     gpio_reset_pin(GPIO_NUM_8);
     gpio_set_direction(GPIO_NUM_8, GPIO_MODE_OUTPUT);
@@ -95,6 +108,22 @@ void uart_init(void)
     ESP_ERROR_CHECK(uart_set_pin(UART_PORT,TXD_PIN,RXD_PIN,
                                 UART_PIN_NO_CHANGE,UART_PIN_NO_CHANGE));
     gpio_set_pull_mode(RXD_PIN,GPIO_PULLUP_ONLY);               
+}
+static void button_init()
+{
+    gpio_config_t button_config = {
+        .pin_bit_mask = (1ull<<BUTTON),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE,
+    };
+    gpio_config(&button_config);
+
+    button_queue = xQueueCreate(10,sizeof(uint32_t));
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(BUTTON,button_isr_handler,(void*)BUTTON);
+    xTaskCreate(Button_task,"Button_task",2048,NULL,10,NULL);
 }
 
 /*========================================RXD=========================================================*/
@@ -235,6 +264,7 @@ void cmd_process(const char c)
     //else line to long, extra character are dropped
     
 }
+
 void handle_cmd(const char* cmd)
 {
     char Ready[32];
@@ -262,6 +292,37 @@ void handle_cmd(const char* cmd)
     }
     printf("[CMD]: %s \n",cmd);
 }
+
+/***************************************button control**************************************************/
+
+static void Button_task(void*pv)
+{
+    uint32_t gpio_num;
+    char Ready[32];
+    while(1)
+    {/*
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // sleep until the ISR pokes us
+        vTaskDelay(pdMS_TO_TICKS(30));              // let the contacts settle
+        ulTaskNotifyTake(pdTRUE, 0);                // discard bounce edges that arrived meanwhile
+
+        printf("wake-up latency: %lld us\n", (long long)(esp_timer_get_time() - isr_time_us));*/
+
+        if(xQueueReceive(button_queue,&gpio_num,portMAX_DELAY))
+        {
+            int button_state = gpio_get_level(BUTTON);
+            if(button_state==0)
+            {
+                led_state = !led_state;
+                led_set(led_state);
+                snprintf(Ready,sizeof(Ready),"[BUTTON PRESSED ] LED %s\n",led_state?"OFF":"ON");
+                printf("%s",Ready);
+                uart_send(Ready);
+            }
+        }
+    }
+}
+
+/*******************************************LED CONTROL****************************************************/
 
 static void led_set(bool on)
 {
